@@ -450,6 +450,7 @@ namespace cryptonote
     uint64_t timestamp;
     crypto::hash  prev_id;
     uint32_t nonce;
+    float nproof[8320];
 
     BEGIN_SERIALIZE()
       VARINT_FIELD(major_version)

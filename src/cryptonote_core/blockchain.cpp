@@ -58,6 +58,8 @@
 #include "common/varint.h"
 #include "common/pruning.h"
 
+#include "npow_validator.h"
+
 #undef MONERO_DEFAULT_LOG_CATEGORY
 #define MONERO_DEFAULT_LOG_CATEGORY "blockchain"
 
@@ -4065,12 +4067,52 @@ leave:
   difficulty_type current_diffic = get_difficulty_for_next_block();
   CHECK_AND_ASSERT_MES(current_diffic, false, "!!!!!!!!! difficulty overhead !!!!!!!!!");
 
+  // convert difficulty to a block height difficulty
+  static const boost::multiprecision::uint128_t UINT128_MAX = ((boost::multiprecision::uint128_t) -1); //0xffffffffffffffffffffffffffffffff
+  boost::multiprecision::uint128_t high = m_db->height()-1;
+  boost::multiprecision::uint128_t temp = 0;
+  if(high > 0)
+    temp = (high / UINT128_MAX) * current_diffic;
+  uint64_t ndiff = static_cast<uint64_t>(temp);
+  //MCINFO("verify", "Block Diff: " << ndiff << std::endl); //////
+
   TIME_MEASURE_FINISH(target_calculating_time);
 
   TIME_MEASURE_START(longhash_calculating_time);
 
-  crypto::hash proof_of_work;
-  memset(proof_of_work.data, 0xff, sizeof(proof_of_work.data));
+
+////////////////////////////////////////
+
+  // convert weights to float32
+  // float weights[8320];
+  // for(int i = 0; i < 8320; i++)
+  //   weights[i] = NPOW_unpackFloat(bl.nproof[i]);
+
+  // enumerate hashes in difficulty
+  const uint64_t top = m_db->height();
+  const uint64_t end = top - ndiff;
+  for(uint64_t i = top; i >= end; i--)
+  {
+    // get h1 (target) & h2 (input)
+    const crypto::hash h1 = m_db->get_block_hash_from_height(i);
+    const crypto::hash h2 = m_db->get_block_hash_from_height(i-1);
+
+    // convert to hexidecimal strings
+    std::string h1s = epee::to_hex::string(epee::as_byte_span(h1.data));
+    std::string h2s = epee::to_hex::string(epee::as_byte_span(h2.data));
+
+    // check
+    if(NPOW_check(h2s.c_str(), h1s.c_str(), &bl.nproof[0]) == 0)
+    {
+      MERROR_VER("Block with id: " << id << std::endl << "did not pass the neural proof-of-work at height " << blockchain_height << ", classic difficulty: " << current_diffic << ", neural difficulty: " << ndiff);
+      bvc.m_verifivation_failed = true;
+      bvc.m_bad_pow = true;
+      goto leave;
+    }
+  }
+
+  // crypto::hash proof_of_work;
+  // memset(proof_of_work.data, 0xff, sizeof(proof_of_work.data));
 
   // Formerly the code below contained an if loop with the following condition
   // !m_checkpoints.is_in_checkpoint_zone(get_current_blockchain_height())
@@ -4081,48 +4123,48 @@ leave:
   // FIXME: height parameter is not used...should it be used or should it not
   // be a parameter?
   // validate proof_of_work versus difficulty target
-  bool precomputed = false;
-  bool fast_check = false;
-#if defined(PER_BLOCK_CHECKPOINT)
-  if (blockchain_height < m_blocks_hash_check.size())
-  {
-    const auto &expected_hash = m_blocks_hash_check[blockchain_height].first;
-    if (expected_hash != crypto::null_hash)
-    {
-      if (memcmp(&id, &expected_hash, sizeof(hash)) != 0)
-      {
-        MERROR_VER("Block with id is INVALID: " << id << ", expected " << expected_hash);
-        bvc.m_verifivation_failed = true;
-        goto leave;
-      }
-      fast_check = true;
-    }
-    else
-    {
-      MCINFO("verify", "No pre-validated hash at height " << blockchain_height << ", verifying fully");
-    }
-  }
-#endif
-  if (!fast_check)
-  {
-    auto it = m_blocks_longhash_table.find(id);
-    if (it != m_blocks_longhash_table.end())
-    {
-      precomputed = true;
-      proof_of_work = it->second;
-    }
-    else
-      proof_of_work = get_block_longhash(this, bl, blockchain_height, 0);
+  // bool precomputed = false;
+//   bool fast_check = false;
+// #if defined(PER_BLOCK_CHECKPOINT)
+//   if (blockchain_height < m_blocks_hash_check.size())
+//   {
+//     const auto &expected_hash = m_blocks_hash_check[blockchain_height].first;
+//     if (expected_hash != crypto::null_hash)
+//     {
+//       if (memcmp(&id, &expected_hash, sizeof(hash)) != 0)
+//       {
+//         MERROR_VER("Block with id is INVALID: " << id << ", expected " << expected_hash);
+//         bvc.m_verifivation_failed = true;
+//         goto leave;
+//       }
+//       fast_check = true;
+//     }
+//     else
+//     {
+//       MCINFO("verify", "No pre-validated hash at height " << blockchain_height << ", verifying fully");
+//     }
+//   }
+// #endif
+//   if (!fast_check)
+//   {
+//     auto it = m_blocks_longhash_table.find(id);
+//     if (it != m_blocks_longhash_table.end())
+//     {
+//       precomputed = true;
+//       proof_of_work = it->second;
+//     }
+//     else
+//       proof_of_work = get_block_longhash(this, bl, blockchain_height, 0);
 
-    // validate proof_of_work versus difficulty target
-    if(!check_hash(proof_of_work, current_diffic))
-    {
-      MERROR_VER("Block with id: " << id << std::endl << "does not have enough proof of work: " << proof_of_work << " at height " << blockchain_height << ", unexpected difficulty: " << current_diffic);
-      bvc.m_verifivation_failed = true;
-      bvc.m_bad_pow = true;
-      goto leave;
-    }
-  }
+//     // validate proof_of_work versus difficulty target
+//     if(!check_hash(proof_of_work, current_diffic))
+//     {
+//       MERROR_VER("Block with id: " << id << std::endl << "does not have enough proof of work: " << proof_of_work << " at height " << blockchain_height << ", unexpected difficulty: " << current_diffic);
+//       bvc.m_verifivation_failed = true;
+//       bvc.m_bad_pow = true;
+//       goto leave;
+//     }
+//   }
 
   // If we're at a checkpoint, ensure that our hardcoded checkpoint hash
   // is correct.
@@ -4137,8 +4179,8 @@ leave:
   }
 
   TIME_MEASURE_FINISH(longhash_calculating_time);
-  if (precomputed)
-    longhash_calculating_time += m_fake_pow_calc_time;
+  // if (precomputed)
+  //   longhash_calculating_time += m_fake_pow_calc_time;
 
   TIME_MEASURE_START(t3);
 
@@ -4230,10 +4272,10 @@ leave:
     t_dblspnd += dd;
     TIME_MEASURE_START(cc);
 
-#if defined(PER_BLOCK_CHECKPOINT)
-    if (!fast_check)
-#endif
-    {
+// #if defined(PER_BLOCK_CHECKPOINT)
+//     if (!fast_check)
+// #endif
+//     {
       // validate that transaction inputs and the keys spending them are correct.
       tx_verification_context tvc;
       if(!check_tx_inputs(tx, tvc))
@@ -4249,7 +4291,7 @@ leave:
         return_tx_to_pool(txs);
         goto leave;
       }
-    }
+    // }
 #if defined(PER_BLOCK_CHECKPOINT)
     else
     {
@@ -4313,8 +4355,8 @@ leave:
     cumulative_difficulty += m_db->get_block_cumulative_difficulty(blockchain_height - 1);
 
   TIME_MEASURE_FINISH(block_processing_time);
-  if(precomputed)
-    block_processing_time += m_fake_pow_calc_time;
+  // if(precomputed)
+  //   block_processing_time += m_fake_pow_calc_time;
 
   rtxn_guard.stop();
   TIME_MEASURE_START(addblock);
@@ -4360,7 +4402,8 @@ leave:
     return false;
   }
 
-  MINFO("+++++ BLOCK SUCCESSFULLY ADDED" << std::endl << "id:\t" << id << std::endl << "PoW:\t" << proof_of_work << std::endl << "HEIGHT " << new_height-1 << ", difficulty:\t" << current_diffic << std::endl << "block reward: " << print_money(fee_summary + base_reward) << "(" << print_money(base_reward) << " + " << print_money(fee_summary) << "), coinbase_weight: " << coinbase_weight << ", cumulative weight: " << cumulative_block_weight << ", " << block_processing_time << "(" << target_calculating_time << "/" << longhash_calculating_time << ")ms");
+  //MINFO("+++++ BLOCK SUCCESSFULLY ADDED" << std::endl << "id:\t" << id << std::endl << "PoW:\t" << proof_of_work << std::endl << "HEIGHT " << new_height-1 << ", difficulty:\t" << current_diffic << std::endl << "block reward: " << print_money(fee_summary + base_reward) << "(" << print_money(base_reward) << " + " << print_money(fee_summary) << "), coinbase_weight: " << coinbase_weight << ", cumulative weight: " << cumulative_block_weight << ", " << block_processing_time << "(" << target_calculating_time << "/" << longhash_calculating_time << ")ms");
+  MINFO("+++++ BLOCK SUCCESSFULLY ADDED" << std::endl << "id:\t" << id << std::endl << std::endl << "HEIGHT " << new_height-1 << ", difficulty:\t" << current_diffic << std::endl << "block reward: " << print_money(fee_summary + base_reward) << "(" << print_money(base_reward) << " + " << print_money(fee_summary) << "), coinbase_weight: " << coinbase_weight << ", cumulative weight: " << cumulative_block_weight << ", " << block_processing_time << "(" << target_calculating_time << "/" << longhash_calculating_time << ")ms");
   if(m_show_time_stats)
   {
     MINFO("Height: " << new_height << " coinbase weight: " << coinbase_weight << " cumm: "
