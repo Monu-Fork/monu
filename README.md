@@ -16,6 +16,9 @@ Monu is a fork of Monero which changes its poof-of-work system to a neural proof
 - src/p2p/net_node.h
 - src/hardforks/hardforks.cpp
 
+## Added Files
+- src/cryptonote_core/npow_validator.h
+
 ## Table of Contents
 
   - [Development resources](#development-resources)
